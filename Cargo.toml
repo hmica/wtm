@@ -1,0 +1,24 @@
+[package]
+name = "wtm"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal UI for Git worktree management"
+license = "MIT"
+repository = "https://github.com/hmica/wtm"
+
+[dependencies]
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Config
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Utility
+dirs = "5"
+chrono = "0.4"
