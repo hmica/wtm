@@ -33,11 +33,14 @@ pub fn list_worktrees(repo_path: &Path) -> Result<Vec<Worktree>> {
         return Err(anyhow!("git worktree list failed: {}", stderr));
     }
 
+    // Find main branch once for all worktrees
+    let main_branch = find_main_branch(repo_path);
+
     let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_worktree_list(&stdout)
+    parse_worktree_list(&stdout, main_branch.as_deref())
 }
 
-fn parse_worktree_list(output: &str) -> Result<Vec<Worktree>> {
+fn parse_worktree_list(output: &str, main_branch: Option<&str>) -> Result<Vec<Worktree>> {
     let mut worktrees = Vec::new();
     let mut current_path: Option<PathBuf> = None;
     let mut current_commit = String::new();
@@ -51,7 +54,7 @@ fn parse_worktree_list(output: &str) -> Result<Vec<Worktree>> {
                 let has_changes = has_uncommitted_changes(&path).unwrap_or(false);
                 let status = load_worktree_status(&path);
                 let branch_ref = current_branch.as_deref();
-                let (ahead, behind) = get_ahead_behind(&path, branch_ref);
+                let (ahead, behind) = get_ahead_behind(&path, branch_ref, main_branch);
                 worktrees.push(Worktree {
                     path,
                     branch: current_branch.take(),
@@ -87,7 +90,7 @@ fn parse_worktree_list(output: &str) -> Result<Vec<Worktree>> {
         let has_changes = has_uncommitted_changes(&path).unwrap_or(false);
         let status = load_worktree_status(&path);
         let branch_ref = current_branch.as_deref();
-        let (ahead, behind) = get_ahead_behind(&path, branch_ref);
+        let (ahead, behind) = get_ahead_behind(&path, branch_ref, main_branch);
         worktrees.push(Worktree {
             path,
             branch: current_branch,
@@ -225,14 +228,16 @@ pub fn get_git_status(worktree_path: &Path) -> Result<String> {
 
 /// Get commits ahead/behind compared to a base branch (main/master)
 /// Returns (ahead, behind) tuple
-pub fn get_ahead_behind(worktree_path: &Path, branch: Option<&str>) -> (u32, u32) {
+fn get_ahead_behind(worktree_path: &Path, branch: Option<&str>, main_branch: Option<&str>) -> (u32, u32) {
     let branch = match branch {
         Some(b) => b,
         None => return (0, 0), // Detached HEAD
     };
 
-    // Try to find the main branch name (main or master)
-    let main_branch = find_main_branch(worktree_path).unwrap_or_else(|| "main".to_string());
+    let main_branch = match main_branch {
+        Some(m) => m,
+        None => return (0, 0), // No main branch found
+    };
 
     // Don't compare main to itself
     if branch == main_branch {

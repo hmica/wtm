@@ -120,7 +120,7 @@ pub fn render_create_dialog(frame: &mut Frame, app: &App) {
 }
 
 pub fn render_delete_dialog(frame: &mut Frame, app: &App) {
-    let area = centered_rect(50, 30, frame.area());
+    let area = centered_rect(55, 40, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
@@ -132,47 +132,98 @@ pub fn render_delete_dialog(frame: &mut Frame, app: &App) {
     frame.render_widget(block, area);
 
     if let Some(wt) = app.selected_worktree() {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(2),
-                Constraint::Length(2),
-                Constraint::Length(2),
-                Constraint::Min(0),
-            ])
-            .margin(1)
-            .split(inner);
-
         let branch = wt.branch.as_deref().unwrap_or("(detached)");
+        let has_unmerged = wt.ahead > 0;
+        let is_dangerous = wt.has_changes || has_unmerged;
 
-        let warning = if wt.has_changes {
-            Paragraph::new(Line::from(vec![
-                Span::styled("WARNING: ", Style::default().fg(Color::Red)),
-                Span::raw("Worktree has uncommitted changes!"),
-            ]))
+        // Build warning lines
+        let mut lines: Vec<Line> = vec![];
+
+        if is_dangerous {
+            lines.push(Line::from(Span::styled(
+                " ⚠ WARNING - DATA LOSS RISK ⚠",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+
+            if wt.has_changes {
+                lines.push(Line::from(vec![
+                    Span::styled(" • ", Style::default().fg(Color::Red)),
+                    Span::styled("Uncommitted changes", Style::default().fg(Color::Red)),
+                    Span::raw(" (will force delete)"),
+                ]));
+            }
+
+            if has_unmerged {
+                lines.push(Line::from(vec![
+                    Span::styled(" • ", Style::default().fg(Color::Red)),
+                    Span::styled(
+                        format!("{} unmerged commit(s)", wt.ahead),
+                        Style::default().fg(Color::Red),
+                    ),
+                    Span::raw(" (will be lost!)"),
+                ]));
+            }
+
+            lines.push(Line::from(""));
+        }
+
+        lines.push(Line::from(format!(" Branch: {}", branch)));
+        lines.push(Line::from(format!(" Path: {}", wt.path.display())));
+        lines.push(Line::from(""));
+
+        if is_dangerous {
+            lines.push(Line::from(vec![
+                Span::styled(" Force delete? ", Style::default().fg(Color::Red)),
+                Span::styled("y", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::raw("/"),
+                Span::styled("n", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            ]));
         } else {
-            Paragraph::new("")
-        };
-        frame.render_widget(warning, chunks[0]);
+            lines.push(Line::from(vec![
+                Span::raw(" Delete this worktree? "),
+                Span::styled("y", Style::default().fg(Color::Green)),
+                Span::raw("/"),
+                Span::styled("n", Style::default().fg(Color::Red)),
+            ]));
+        }
 
-        let info = Paragraph::new(vec![
-            Line::from(format!("Branch: {}", branch)),
-            Line::from(format!("Path: {}", wt.path.display())),
-        ]);
-        frame.render_widget(info, chunks[1]);
-
-        let confirm = Paragraph::new(Line::from(vec![
-            Span::raw("Delete this worktree? "),
-            Span::styled("y", Style::default().fg(Color::Green)),
-            Span::raw("/"),
-            Span::styled("n", Style::default().fg(Color::Red)),
-        ]));
-        frame.render_widget(confirm, chunks[2]);
+        let content = Paragraph::new(lines);
+        frame.render_widget(content, inner);
     }
 }
 
-pub fn render_help(frame: &mut Frame) {
-    let area = centered_rect(50, 60, frame.area());
+pub fn render_deleting(frame: &mut Frame, app: &App) {
+    let area = centered_rect(40, 20, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Deleting ")
+        .style(Style::default().bg(Color::Black));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if let Some(wt) = app.selected_worktree() {
+        let branch = wt.branch.as_deref().unwrap_or("(detached)");
+        let content = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Deleting worktree...",
+                Style::default().fg(Color::Yellow),
+            )),
+            Line::from(""),
+            Line::from(format!("  {}", branch)),
+        ]);
+        frame.render_widget(content, inner);
+    }
+}
+
+pub fn render_help(frame: &mut Frame, app: &App) {
+    use crate::config::Shortcut;
+
+    let area = centered_rect(55, 70, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
@@ -183,41 +234,70 @@ pub fn render_help(frame: &mut Frame) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let help_text = vec![
+    let mut lines: Vec<Line> = vec![
         Line::from(""),
         Line::from(Span::styled(
-            " Navigation",
+            " Navigation (hardcoded)",
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from("  j/k, ↑/↓    Move selection"),
-        Line::from("  Enter       Exit and cd to worktree"),
-        Line::from("  t/Tab       Toggle notes/git status view"),
+        Line::from("  Tab         Toggle notes/git status view"),
         Line::from(""),
         Line::from(Span::styled(
-            " Actions",
+            " Shortcuts (from config)",
             Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  n           Create new worktree"),
-        Line::from("  d           Delete worktree"),
-        Line::from("  e           Edit status file in $EDITOR"),
-        Line::from("  g           Open lazygit"),
-        Line::from("  c           Open in IDE ($CODE_IDE)"),
-        Line::from("  m           Merge main (ff-only)"),
-        Line::from("  r           Refresh list"),
-        Line::from(""),
-        Line::from(Span::styled(
-            " Other",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  ?           Toggle this help"),
-        Line::from("  q           Quit"),
-        Line::from(""),
-        Line::from(Span::styled(
-            " Press any key to close",
-            Style::default().fg(Color::DarkGray),
         )),
     ];
 
-    let help = Paragraph::new(help_text);
+    // Get shortcuts from config and sort by key
+    let mut shortcuts: Vec<_> = app.config.shortcuts.iter().collect();
+    shortcuts.sort_by(|a, b| a.0.cmp(b.0));
+
+    for (key, shortcut) in shortcuts {
+        let description = match shortcut {
+            Shortcut::BuiltIn { action } => {
+                match action.as_str() {
+                    "create" => "Create new worktree".to_string(),
+                    "delete" => "Delete worktree".to_string(),
+                    "edit" => "Edit status file".to_string(),
+                    "merge_main" => "Merge main (ff-only)".to_string(),
+                    "toggle_view" => "Toggle notes/git view".to_string(),
+                    "refresh" => "Refresh list".to_string(),
+                    "help" => "Toggle this help".to_string(),
+                    "quit" => "Quit".to_string(),
+                    "cd" => "Exit and cd to worktree".to_string(),
+                    _ => format!("Action: {}", action),
+                }
+            }
+            Shortcut::Command { cmd, mode } => {
+                let mode_str = match mode {
+                    crate::config::CommandMode::Replace => "replace",
+                    crate::config::CommandMode::Detach => "detach",
+                };
+                // Truncate long commands
+                let cmd_short = if cmd.len() > 25 {
+                    format!("{}...", &cmd[..22])
+                } else {
+                    cmd.clone()
+                };
+                format!("{} ({})", cmd_short, mode_str)
+            }
+        };
+
+        let key_display = if key == "Enter" { "Enter" } else { key };
+        lines.push(Line::from(format!("  {:<10}  {}", key_display, description)));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        " Config: ~/.config/wtm/config.toml",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(Span::styled(
+        " Press any key to close",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let help = Paragraph::new(lines);
     frame.render_widget(help, inner);
 }

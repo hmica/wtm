@@ -6,6 +6,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::widgets::ListState;
 use ratatui::DefaultTerminal;
 
+use crate::config::{CommandMode, Config, Shortcut};
 use crate::git::Worktree;
 use crate::ui;
 
@@ -15,6 +16,7 @@ pub enum AppMode {
     Normal,
     Creating,
     ConfirmDelete,
+    Deleting,
     Help,
 }
 
@@ -41,11 +43,19 @@ pub struct App {
     pub filtered_branches: Vec<String>,
     pub exit_path: Option<PathBuf>,
     pub needs_full_redraw: bool,
+    pub config: Config,
 }
 
 impl App {
     pub fn new() -> Result<Self> {
         let repo_path = std::env::current_dir()?;
+        let config = match Config::load() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Warning: Could not load config: {}. Using defaults.", e);
+                Config::default()
+            }
+        };
         let mut app = Self {
             worktrees: Vec::new(),
             selected: 0,
@@ -62,6 +72,7 @@ impl App {
             filtered_branches: Vec::new(),
             exit_path: None,
             needs_full_redraw: false,
+            config,
         };
         app.list_state.select(Some(0));
         Ok(app)
@@ -84,6 +95,12 @@ impl App {
 
             // Render
             terminal.draw(|frame| ui::render(frame, self))?;
+
+            // Perform delete after showing "Deleting..." UI
+            if self.mode == AppMode::Deleting {
+                self.delete_worktree()?;
+                continue;
+            }
 
             // Poll for events with timeout
             let timeout = tick_rate.saturating_sub(last_tick.elapsed());
@@ -116,30 +133,121 @@ impl App {
             AppMode::Normal => self.handle_normal_key(key),
             AppMode::Creating => self.handle_creating_key(key),
             AppMode::ConfirmDelete => self.handle_delete_key(key),
+            AppMode::Deleting => Ok(()), // Ignore input while deleting
             AppMode::Help => self.handle_help_key(key),
         }
     }
 
     fn handle_normal_key(&mut self, key: KeyCode) -> Result<()> {
+        // Navigation keys are always hardcoded
         match key {
-            KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Char('j') | KeyCode::Down => self.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => self.select_previous(),
-            KeyCode::Char('n') => self.start_create(),
-            KeyCode::Char('d') => self.start_delete(),
-            KeyCode::Char('e') => self.open_editor()?,
-            KeyCode::Char('g') => self.open_lazygit()?,
-            KeyCode::Char('c') => self.open_in_ide()?,
-            KeyCode::Char('m') => self.merge_main()?,
-            KeyCode::Char('t') | KeyCode::Tab => self.toggle_detail_view(),
-            KeyCode::Char('r') => {
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.select_next();
+                return Ok(());
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.select_previous();
+                return Ok(());
+            }
+            KeyCode::Tab => {
+                self.toggle_detail_view();
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        // Convert key to config key string
+        let key_str = match key {
+            KeyCode::Char(c) => c.to_string(),
+            KeyCode::Enter => "Enter".to_string(),
+            KeyCode::Esc => "Esc".to_string(),
+            _ => return Ok(()),
+        };
+
+        // Look up shortcut in config
+        if let Some(shortcut) = self.config.get_shortcut(&key_str).cloned() {
+            match shortcut {
+                Shortcut::BuiltIn { action } => self.run_builtin_action(&action)?,
+                Shortcut::Command { cmd, mode } => self.run_command(&cmd, mode)?,
+            }
+        }
+
+        Ok(())
+    }
+
+    fn run_builtin_action(&mut self, action: &str) -> Result<()> {
+        match action {
+            "quit" => self.should_quit = true,
+            "create" => self.start_create(),
+            "delete" => self.start_delete(),
+            "edit" => self.open_editor()?,
+            "merge_main" => self.merge_main()?,
+            "toggle_view" => self.toggle_detail_view(),
+            "refresh" => {
                 self.refresh_worktrees();
                 self.refresh_branches();
             }
-            KeyCode::Char('?') => self.mode = AppMode::Help,
-            KeyCode::Enter => self.exit_to_worktree(),
-            _ => {}
+            "help" => self.mode = AppMode::Help,
+            "cd" => self.exit_to_worktree(),
+            _ => {
+                self.error = Some(format!("Unknown action: {}", action));
+            }
         }
+        Ok(())
+    }
+
+    fn run_command(&mut self, cmd: &str, mode: CommandMode) -> Result<()> {
+        let Some(wt) = self.worktrees.get(self.selected) else {
+            return Ok(());
+        };
+
+        let branch = wt.branch.as_deref().unwrap_or("detached");
+        let path = wt.path.to_string_lossy();
+        let repo_path = self.repo_path.to_string_lossy();
+
+        // Expand variables in command
+        let expanded_cmd = cmd
+            .replace("$1", &path)
+            .replace("$path", &path)
+            .replace("$2", branch)
+            .replace("$branch", branch)
+            .replace("$repo", &repo_path);
+
+        match mode {
+            CommandMode::Replace => {
+                // Take over terminal (like lazygit)
+                ratatui::restore();
+
+                let status = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&expanded_cmd)
+                    .current_dir(&wt.path)
+                    .status();
+
+                let _ = ratatui::init();
+
+                if let Err(e) = status {
+                    self.error = Some(format!("Command failed: {}", e));
+                }
+
+                self.refresh_worktrees();
+                self.refresh_branches();
+                self.load_status_content();
+                self.needs_full_redraw = true;
+            }
+            CommandMode::Detach => {
+                // Spawn in background (like IDE)
+                let result = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&expanded_cmd)
+                    .spawn();
+
+                if let Err(e) = result {
+                    self.error = Some(format!("Failed to spawn: {}", e));
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -194,7 +302,8 @@ impl App {
     fn handle_delete_key(&mut self, key: KeyCode) -> Result<()> {
         match key {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
-                self.delete_worktree()?;
+                // Switch to Deleting mode - actual delete happens on next frame
+                self.mode = AppMode::Deleting;
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 self.mode = AppMode::Normal;
@@ -429,52 +538,6 @@ impl App {
             self.load_status_content();
             self.refresh_worktrees();
             self.needs_full_redraw = true;
-        }
-
-        Ok(())
-    }
-
-    fn open_lazygit(&mut self) -> Result<()> {
-        if let Some(wt) = self.worktrees.get(self.selected) {
-            // Restore terminal for lazygit
-            ratatui::restore();
-
-            // Run lazygit
-            let status = std::process::Command::new("lazygit")
-                .current_dir(&wt.path)
-                .status();
-
-            // Reinitialize terminal
-            let _ = ratatui::init();
-
-            if let Err(e) = status {
-                self.error = Some(format!("Failed to open lazygit: {}", e));
-            }
-
-            self.refresh_worktrees();
-            self.refresh_branches();
-            self.load_status_content();
-            self.needs_full_redraw = true;
-        }
-
-        Ok(())
-    }
-
-    fn open_in_ide(&mut self) -> Result<()> {
-        if let Some(wt) = self.worktrees.get(self.selected) {
-            let ide = std::env::var("CODE_IDE").unwrap_or_else(|_| "code".to_string());
-
-            // Spawn detached (don't wait for IDE to close)
-            let result = std::process::Command::new(&ide)
-                .arg(&wt.path)
-                .spawn();
-
-            match result {
-                Ok(_) => {} // IDE launched successfully
-                Err(e) => {
-                    self.error = Some(format!("Failed to open {}: {}", ide, e));
-                }
-            }
         }
 
         Ok(())

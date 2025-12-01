@@ -30,8 +30,11 @@ pub fn render(frame: &mut Frame, app: &App) {
         AppMode::ConfirmDelete => {
             dialogs::render_delete_dialog(frame, app);
         }
+        AppMode::Deleting => {
+            dialogs::render_deleting(frame, app);
+        }
         AppMode::Help => {
-            dialogs::render_help(frame);
+            dialogs::render_help(frame, app);
         }
         AppMode::Normal => {}
     }
