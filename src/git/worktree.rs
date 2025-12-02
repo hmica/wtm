@@ -123,7 +123,7 @@ fn load_worktree_status(path: &Path) -> WorktreeStatus {
 
 pub fn list_branches(repo_path: &Path) -> Result<Vec<String>> {
     let output = Command::new("git")
-        .args(["branch", "--list", "--format=%(refname:short)"])
+        .args(["branch", "-a", "--list", "--format=%(refname:short)"])
         .current_dir(repo_path)
         .output()?;
 
@@ -133,7 +133,21 @@ pub fn list_branches(repo_path: &Path) -> Result<Vec<String>> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let branches: Vec<String> = stdout.lines().map(|s| s.to_string()).collect();
+
+    // Collect branches, stripping origin/ prefix from remotes and deduplicating
+    let mut branches: Vec<String> = stdout
+        .lines()
+        .map(|s| {
+            s.strip_prefix("origin/")
+                .unwrap_or(s)
+                .to_string()
+        })
+        .filter(|s| s != "HEAD") // Filter out origin/HEAD
+        .collect();
+
+    // Sort and deduplicate
+    branches.sort();
+    branches.dedup();
 
     Ok(branches)
 }
@@ -143,28 +157,24 @@ pub fn create_worktree(
     branch: &str,
     worktree_path: &Path,
     branch_exists: bool,
+    start_point: Option<&str>,
 ) -> Result<()> {
+    let path_str = worktree_path.to_str().unwrap_or_default();
+
     let output = if branch_exists {
         // Use existing branch
         Command::new("git")
-            .args([
-                "worktree",
-                "add",
-                worktree_path.to_str().unwrap_or_default(),
-                branch,
-            ])
+            .args(["worktree", "add", path_str, branch])
             .current_dir(repo_path)
             .output()?
     } else {
-        // Create new branch
+        // Create new branch from start_point (selected worktree's branch)
+        let mut args = vec!["worktree", "add", "-b", branch, path_str];
+        if let Some(start) = start_point {
+            args.push(start);
+        }
         Command::new("git")
-            .args([
-                "worktree",
-                "add",
-                "-b",
-                branch,
-                worktree_path.to_str().unwrap_or_default(),
-            ])
+            .args(&args)
             .current_dir(repo_path)
             .output()?
     };

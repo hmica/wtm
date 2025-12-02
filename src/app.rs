@@ -451,8 +451,20 @@ impl App {
             .unwrap_or(&self.repo_path)
             .join(format!("{}-{}", repo_name, branch.replace('/', "-")));
 
+        // Get start point from selected worktree (for new branches)
+        let start_point = self
+            .worktrees
+            .get(self.selected)
+            .and_then(|wt| wt.branch.clone());
+
         // Create worktree
-        match crate::git::create_worktree(&self.repo_path, &branch, &worktree_path, branch_exists) {
+        match crate::git::create_worktree(
+            &self.repo_path,
+            &branch,
+            &worktree_path,
+            branch_exists,
+            start_point.as_deref(),
+        ) {
             Ok(()) => {
                 // Generate status file
                 let status_content = crate::status::generate_status_file(&branch);
