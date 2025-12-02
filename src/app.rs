@@ -79,6 +79,9 @@ impl App {
     }
 
     pub fn run(&mut self, mut terminal: DefaultTerminal) -> Result<()> {
+        // Clear screen on startup to remove any previous terminal content
+        terminal.clear()?;
+
         // Initial load
         self.refresh_worktrees();
         self.refresh_branches();
