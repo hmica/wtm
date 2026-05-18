@@ -281,6 +281,7 @@ pub fn render_help(frame: &mut Frame, app: &App) {
                     "refresh" => "Refresh list".to_string(),
                     "help" => "Toggle this help".to_string(),
                     "init_logs" => "View worktree init log".to_string(),
+                    "sesh_connect" => "Connect to tmux session (sesh)".to_string(),
                     "quit" => "Quit".to_string(),
                     "cd" => "Exit and cd to worktree".to_string(),
                     _ => format!("Action: {}", action),

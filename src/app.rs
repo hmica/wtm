@@ -260,6 +260,7 @@ impl App {
             }
             "help" => self.mode = AppMode::Help,
             "init_logs" => self.open_init_logs(),
+            "sesh_connect" => self.sesh_connect(),
             "cd" => self.exit_to_worktree(),
             _ => {
                 self.error = Some(format!("Unknown action: {}", action));
@@ -321,6 +322,43 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Connect to (or create) the tmux session for the selected worktree via
+    /// `sesh`, then quit wtm. Mirrors the `CommandMode::Replace` flow.
+    fn sesh_connect(&mut self) {
+        let Some(wt) = self.worktrees.get(self.selected) else {
+            return;
+        };
+        let path = wt.path.clone();
+
+        // Hand the terminal back before passing control to sesh/tmux.
+        ratatui::restore();
+
+        let mut cmd = std::process::Command::new("sesh");
+        cmd.arg("connect");
+        if std::env::var_os("TMUX").is_some() {
+            // Triggered from within a TUI: switch the client rather than attach.
+            cmd.arg("--switch");
+        }
+        cmd.arg(&path);
+
+        match cmd.status() {
+            Ok(s) if s.success() => {
+                // sesh switched/attached the session — wtm's job is done.
+                self.should_quit = true;
+            }
+            Ok(s) => {
+                let _ = ratatui::init();
+                self.error = Some(format!("sesh connect failed (exit {})", s));
+                self.needs_full_redraw = true;
+            }
+            Err(e) => {
+                let _ = ratatui::init();
+                self.error = Some(format!("Failed to run sesh: {}", e));
+                self.needs_full_redraw = true;
+            }
+        }
     }
 
     fn handle_creating_key(&mut self, key: KeyCode) -> Result<()> {

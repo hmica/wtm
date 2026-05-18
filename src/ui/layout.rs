@@ -52,7 +52,7 @@ pub fn render_header(frame: &mut Frame, area: Rect) {
 
 pub fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let keybindings = Line::from(vec![Span::styled(
-        " n:new d:del e:edit g:git c:ide m:merge t:toggle Enter:cd l:logs r:refresh ?:help q:quit ",
+        " n:new d:del e:edit g:git c:ide m:merge t:toggle Enter:cd l:logs s:sesh r:refresh ?:help q:quit ",
         Style::default().fg(Color::DarkGray),
     )]);
 

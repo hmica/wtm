@@ -73,6 +73,7 @@ wtm() {
 | `e` | Edit status file in `$EDITOR` |
 | `g` | Open lazygit |
 | `c` | Open in IDE (`$CODE_IDE`, defaults to `code`) |
+| `s` | Connect to the worktree's tmux session (via [sesh](https://github.com/joshmedeski/sesh)) and quit wtm |
 | `m` | Merge main (fast-forward only) |
 | `r` | Refresh list |
 
@@ -143,7 +144,9 @@ p = { cmd = "gh pr create --web", mode = "detach" }
 
 ### Built-in Actions
 
-`create`, `delete`, `edit`, `merge_main`, `toggle_view`, `refresh`, `help`, `quit`, `cd`, `init_logs`
+`create`, `delete`, `edit`, `merge_main`, `toggle_view`, `refresh`, `help`, `quit`, `cd`, `init_logs`, `sesh_connect`
+
+> `sesh_connect` requires [`sesh`](https://github.com/joshmedeski/sesh) and `tmux` on your `PATH`. It runs `sesh connect` for the selected worktree's directory (switching the tmux client when run inside tmux) and then exits wtm.
 
 ## Environment Variables
 

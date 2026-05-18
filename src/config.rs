@@ -58,6 +58,7 @@ fn default_shortcuts() -> HashMap<String, Shortcut> {
     shortcuts.insert("?".to_string(), Shortcut::BuiltIn { action: "help".to_string() });
     shortcuts.insert("q".to_string(), Shortcut::BuiltIn { action: "quit".to_string() });
     shortcuts.insert("l".to_string(), Shortcut::BuiltIn { action: "init_logs".to_string() });
+    shortcuts.insert("s".to_string(), Shortcut::BuiltIn { action: "sesh_connect".to_string() });
     shortcuts.insert("Enter".to_string(), Shortcut::BuiltIn { action: "cd".to_string() });
 
     // Default custom commands
@@ -118,7 +119,7 @@ r#"# wtm configuration file
 #   $repo         - main repo path
 #
 # Built-in actions:
-#   create, delete, edit, merge_main, toggle_view, refresh, help, quit, cd, init_logs
+#   create, delete, edit, merge_main, toggle_view, refresh, help, quit, cd, init_logs, sesh_connect
 
 {}"#, content);
 
