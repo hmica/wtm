@@ -120,7 +120,7 @@ pub fn render_create_dialog(frame: &mut Frame, app: &App) {
 }
 
 pub fn render_delete_dialog(frame: &mut Frame, app: &App) {
-    let area = centered_rect(55, 40, frame.area());
+    let area = centered_rect(55, 50, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
@@ -170,6 +170,22 @@ pub fn render_delete_dialog(frame: &mut Frame, app: &App) {
 
         lines.push(Line::from(format!(" Branch: {}", branch)));
         lines.push(Line::from(format!(" Path: {}", wt.path.display())));
+
+        // "Also delete the local branch" toggle (only when there is a branch)
+        if wt.branch.is_some() {
+            let (state, state_style) = if app.delete_branch {
+                ("yes", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+            } else {
+                ("no", Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD))
+            };
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::raw(" Also delete local branch "),
+                Span::styled("[b]", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": "),
+                Span::styled(state, state_style),
+            ]));
+        }
         lines.push(Line::from(""));
 
         if is_dangerous {

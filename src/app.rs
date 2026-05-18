@@ -102,6 +102,7 @@ pub struct App {
     pub init_jobs: Vec<InitJob>,
     pub init_outcome: Option<InitJobOutcome>,
     pub init_logs_scroll: u16,
+    pub delete_branch: bool,
 }
 
 impl App {
@@ -134,6 +135,7 @@ impl App {
             init_jobs: Vec::new(),
             init_outcome: None,
             init_logs_scroll: 0,
+            delete_branch: true,
         };
         app.list_state.select(Some(0));
         Ok(app)
@@ -378,6 +380,10 @@ impl App {
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 self.mode = AppMode::Normal;
             }
+            KeyCode::Char('b') | KeyCode::Char('B') => {
+                // Toggle "also delete the local branch"
+                self.delete_branch = !self.delete_branch;
+            }
             _ => {}
         }
         Ok(())
@@ -453,6 +459,7 @@ impl App {
                 self.error = Some("Cannot delete main worktree".to_string());
                 return;
             }
+            self.delete_branch = true;
             self.mode = AppMode::ConfirmDelete;
         }
     }
@@ -720,6 +727,10 @@ impl App {
             }
 
             let path = wt.path.clone();
+            let branch = wt.branch.clone();
+            let force = wt.has_changes;
+            // The branch needs `-D` when it carries unmerged commits.
+            let branch_force = wt.has_changes || wt.ahead > 0;
 
             // Kill any init job still running in this worktree so it doesn't
             // write into a directory git is about to remove.
@@ -731,14 +742,25 @@ impl App {
             self.init_jobs.retain(|j| j.worktree_path != path);
             let _ = std::fs::remove_file(init_log_path(&path));
 
-            match crate::git::delete_worktree(&self.repo_path, &path, wt.has_changes) {
+            self.mode = AppMode::Normal;
+            match crate::git::delete_worktree(&self.repo_path, &path, force) {
                 Ok(()) => {
-                    self.mode = AppMode::Normal;
+                    // Optionally delete the local branch too.
+                    if self.delete_branch {
+                        if let Some(branch) = &branch {
+                            if let Err(e) =
+                                crate::git::delete_branch(&self.repo_path, branch, branch_force)
+                            {
+                                self.error =
+                                    Some(format!("Worktree removed, branch kept: {}", e));
+                            }
+                        }
+                    }
                     self.refresh_worktrees();
+                    self.refresh_branches();
                 }
                 Err(e) => {
                     self.error = Some(format!("Failed to delete worktree: {}", e));
-                    self.mode = AppMode::Normal;
                 }
             }
         }

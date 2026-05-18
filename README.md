@@ -69,7 +69,7 @@ wtm() {
 | Key | Action |
 |-----|--------|
 | `n` | Create new worktree |
-| `d` | Delete worktree |
+| `d` | Delete worktree (and, by default, its local branch — toggle with `b` in the confirm dialog) |
 | `e` | Edit status file in `$EDITOR` |
 | `g` | Open lazygit |
 | `c` | Open in IDE (`$CODE_IDE`, defaults to `code`) |

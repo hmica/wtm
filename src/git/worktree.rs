@@ -204,6 +204,24 @@ pub fn delete_worktree(repo_path: &Path, worktree_path: &Path, force: bool) -> R
     Ok(())
 }
 
+/// Delete a local branch. Uses `git branch -D` when `force` is set (the branch
+/// has unmerged work and the user has confirmed), otherwise `-d` (safe: git
+/// refuses if the branch is not merged).
+pub fn delete_branch(repo_path: &Path, branch: &str, force: bool) -> Result<()> {
+    let flag = if force { "-D" } else { "-d" };
+    let output = Command::new("git")
+        .args(["branch", flag, branch])
+        .current_dir(repo_path)
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("git branch {} failed: {}", flag, stderr.trim()));
+    }
+
+    Ok(())
+}
+
 pub fn has_uncommitted_changes(worktree_path: &Path) -> Result<bool> {
     let output = Command::new("git")
         .args(["status", "--porcelain"])
