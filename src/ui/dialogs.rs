@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
@@ -264,6 +264,7 @@ pub fn render_help(frame: &mut Frame, app: &App) {
                     "toggle_view" => "Toggle notes/git view".to_string(),
                     "refresh" => "Refresh list".to_string(),
                     "help" => "Toggle this help".to_string(),
+                    "init_logs" => "View worktree init log".to_string(),
                     "quit" => "Quit".to_string(),
                     "cd" => "Exit and cd to worktree".to_string(),
                     _ => format!("Action: {}", action),
@@ -300,4 +301,58 @@ pub fn render_help(frame: &mut Frame, app: &App) {
 
     let help = Paragraph::new(lines);
     frame.render_widget(help, inner);
+}
+
+pub fn render_init_logs(frame: &mut Frame, app: &App) {
+    let area = centered_rect(80, 80, frame.area());
+    frame.render_widget(Clear, area);
+
+    let branch = app
+        .selected_worktree()
+        .and_then(|wt| wt.branch.as_deref())
+        .unwrap_or("(detached)");
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Init Log: {}  [j/k scroll, Esc close] ", branch))
+        .style(Style::default().bg(Color::Black));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Re-read the log file on every render so a running job tails live.
+    let lines: Vec<Line> = match app.selected_worktree() {
+        Some(wt) => {
+            let log_path = crate::app::init_log_path(&wt.path);
+            match std::fs::read_to_string(&log_path) {
+                Ok(text) if !text.is_empty() => {
+                    text.lines().map(|l| Line::from(l.to_string())).collect()
+                }
+                Ok(_) => vec![Line::from(Span::styled(
+                    "  (log file is empty)",
+                    Style::default().fg(Color::DarkGray),
+                ))],
+                Err(_) => vec![
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "  No init log for this worktree.",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                    Line::from(Span::styled(
+                        "  (no .worktree-init.sh ran, or it has not started yet)",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                ],
+            }
+        }
+        None => vec![Line::from(Span::styled(
+            "  No worktree selected",
+            Style::default().fg(Color::DarkGray),
+        ))],
+    };
+
+    let logs = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((app.init_logs_scroll, 0));
+    frame.render_widget(logs, inner);
 }

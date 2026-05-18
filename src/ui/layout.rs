@@ -51,24 +51,52 @@ pub fn render_header(frame: &mut Frame, area: Rect) {
 }
 
 pub fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
-    // Show error if present
-    if let Some(error) = &app.error {
-        let error_line = Line::from(vec![
+    let keybindings = Line::from(vec![Span::styled(
+        " n:new d:del e:edit g:git c:ide m:merge t:toggle Enter:cd l:logs r:refresh ?:help q:quit ",
+        Style::default().fg(Color::DarkGray),
+    )]);
+
+    // Line 1 priority: error > running init job > finished init job > blank.
+    let status_line: Line = if let Some(error) = &app.error {
+        Line::from(vec![
             Span::styled(" Error: ", Style::default().fg(Color::Red)),
             Span::raw(error.as_str()),
-        ]);
-        let keybindings = Line::from(vec![Span::styled(
-            " n:new d:del e:edit g:git c:ide m:merge t:toggle r:refresh ?:help q:quit ",
-            Style::default().fg(Color::DarkGray),
-        )]);
-        let footer = Paragraph::new(vec![error_line, keybindings]);
-        frame.render_widget(footer, area);
+        ])
+    } else if let Some(job) = app.init_jobs.first() {
+        const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let elapsed = job.started.elapsed();
+        let frame_idx = (elapsed.as_millis() / 120) as usize % FRAMES.len();
+        let extra = if app.init_jobs.len() > 1 {
+            format!(" (+{} more)", app.init_jobs.len() - 1)
+        } else {
+            String::new()
+        };
+        Line::from(vec![Span::styled(
+            format!(
+                " {} init running for {} ({}s){} ",
+                FRAMES[frame_idx],
+                job.branch,
+                elapsed.as_secs(),
+                extra,
+            ),
+            Style::default().fg(Color::Yellow),
+        )])
+    } else if let Some(outcome) = &app.init_outcome {
+        if outcome.success {
+            Line::from(vec![Span::styled(
+                format!(" init ✓ {} ", outcome.branch),
+                Style::default().fg(Color::Green),
+            )])
+        } else {
+            Line::from(vec![Span::styled(
+                format!(" init ✗ {} (failed — press l for logs) ", outcome.branch),
+                Style::default().fg(Color::Red),
+            )])
+        }
     } else {
-        let keybindings = Line::from(vec![Span::styled(
-            " n:new d:del e:edit g:git c:ide m:merge t:toggle Enter:cd r:refresh ?:help q:quit ",
-            Style::default().fg(Color::DarkGray),
-        )]);
-        let footer = Paragraph::new(vec![Line::default(), keybindings]);
-        frame.render_widget(footer, area);
-    }
+        Line::default()
+    };
+
+    let footer = Paragraph::new(vec![status_line, keybindings]);
+    frame.render_widget(footer, area);
 }

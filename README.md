@@ -79,6 +79,7 @@ wtm() {
 ### Other
 | Key | Action |
 |-----|--------|
+| `l` | View the worktree init-script log |
 | `?` | Help (shows all shortcuts from config) |
 | `q` | Quit |
 
@@ -111,6 +112,7 @@ e = { action = "edit" }
 m = { action = "merge_main" }
 t = { action = "toggle_view" }
 r = { action = "refresh" }
+l = { action = "init_logs" }
 "?" = { action = "help" }
 q = { action = "quit" }
 Enter = { action = "cd" }
@@ -120,7 +122,7 @@ g = { cmd = "lazygit", mode = "replace" }
 c = { cmd = "${CODE_IDE:-code} $1 $2", mode = "detach" }
 
 # Add your own!
-l = { cmd = "gh pr list", mode = "replace" }
+o = { cmd = "gh pr list", mode = "replace" }
 p = { cmd = "gh pr create --web", mode = "detach" }
 ```
 
@@ -141,7 +143,7 @@ p = { cmd = "gh pr create --web", mode = "detach" }
 
 ### Built-in Actions
 
-`create`, `delete`, `edit`, `merge_main`, `toggle_view`, `refresh`, `help`, `quit`, `cd`
+`create`, `delete`, `edit`, `merge_main`, `toggle_view`, `refresh`, `help`, `quit`, `cd`, `init_logs`
 
 ## Environment Variables
 
@@ -152,7 +154,15 @@ p = { cmd = "gh pr create --web", mode = "detach" }
 
 ## Init Script
 
-When creating a new worktree, wtm looks for `.worktree-init.sh` in your main repo. If found, it runs automatically in the new worktree directory.
+When creating a new worktree, wtm looks for `.worktree-init.sh` in your main repo. If found, it runs **in the background** in the new worktree directory — the TUI stays responsive while it works.
+
+While the script runs:
+
+- the worktree shows a `⟳` indicator in the list
+- the footer shows a live status: `init running for <branch>` → `init ✓` / `init ✗`
+- its output (stdout + stderr) is captured to a log file under `~/.local/state/wtm/logs/`
+
+Press `l` to open the init log for the selected worktree (updates live while the script runs; scroll with `j`/`k`).
 
 **Example `.worktree-init.sh`:**
 

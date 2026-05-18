@@ -57,6 +57,7 @@ fn default_shortcuts() -> HashMap<String, Shortcut> {
     shortcuts.insert("r".to_string(), Shortcut::BuiltIn { action: "refresh".to_string() });
     shortcuts.insert("?".to_string(), Shortcut::BuiltIn { action: "help".to_string() });
     shortcuts.insert("q".to_string(), Shortcut::BuiltIn { action: "quit".to_string() });
+    shortcuts.insert("l".to_string(), Shortcut::BuiltIn { action: "init_logs".to_string() });
     shortcuts.insert("Enter".to_string(), Shortcut::BuiltIn { action: "cd".to_string() });
 
     // Default custom commands
@@ -78,7 +79,8 @@ impl Config {
 
         if config_path.exists() {
             let content = fs::read_to_string(&config_path)?;
-            let config: Config = toml::from_str(&content)?;
+            let mut config: Config = toml::from_str(&content)?;
+            config.merge_missing_defaults();
             Ok(config)
         } else {
             // Create default config
@@ -116,7 +118,7 @@ r#"# wtm configuration file
 #   $repo         - main repo path
 #
 # Built-in actions:
-#   create, delete, edit, merge_main, toggle_view, refresh, help, quit, cd
+#   create, delete, edit, merge_main, toggle_view, refresh, help, quit, cd, init_logs
 
 {}"#, content);
 
@@ -138,5 +140,15 @@ r#"# wtm configuration file
 
     pub fn get_shortcut(&self, key: &str) -> Option<&Shortcut> {
         self.shortcuts.get(key)
+    }
+
+    /// Add any default shortcut whose key is missing from a user's existing
+    /// config. This keeps configs written by older versions usable: new
+    /// built-in actions (e.g. `init_logs`) become available without the user
+    /// having to edit their config file. Existing bindings are never changed.
+    fn merge_missing_defaults(&mut self) {
+        for (key, shortcut) in default_shortcuts() {
+            self.shortcuts.entry(key).or_insert(shortcut);
+        }
     }
 }

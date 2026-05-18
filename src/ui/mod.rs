@@ -36,6 +36,9 @@ pub fn render(frame: &mut Frame, app: &App) {
         AppMode::Help => {
             dialogs::render_help(frame, app);
         }
+        AppMode::InitLogs => {
+            dialogs::render_init_logs(frame, app);
+        }
         AppMode::Normal => {}
     }
 }

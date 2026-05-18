@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -18,6 +18,7 @@ pub enum AppMode {
     ConfirmDelete,
     Deleting,
     Help,
+    InitLogs,
 }
 
 #[derive(Default, Clone, Copy, PartialEq)]
@@ -25,6 +26,60 @@ pub enum DetailViewMode {
     #[default]
     Notes,
     GitStatus,
+}
+
+/// A `.worktree-init.sh` process running in the background after worktree creation.
+///
+/// The log file path is not stored: it is derived deterministically from
+/// `worktree_path` via [`init_log_path`].
+pub struct InitJob {
+    pub child: std::process::Child,
+    pub worktree_path: PathBuf,
+    pub branch: String,
+    pub started: Instant,
+}
+
+/// The result of a finished [`InitJob`], surfaced briefly in the footer.
+pub struct InitJobOutcome {
+    pub branch: String,
+    pub success: bool,
+    pub finished: Instant,
+}
+
+/// Resolve the central log-file path for a worktree's init script.
+///
+/// Logs live under `$XDG_STATE_HOME/wtm/logs/` (fallback `~/.local/state/wtm/logs/`),
+/// keyed deterministically by the worktree path so the spawner and the log viewer
+/// always agree without storing a mapping.
+pub fn init_log_path(worktree_path: &Path) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+
+    let state_dir = std::env::var("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".local")
+                .join("state")
+        })
+        .join("wtm")
+        .join("logs");
+
+    // Canonicalize so the key is stable regardless of how the path string was
+    // built (constructed path on creation vs. `git worktree list` output later).
+    let canonical = std::fs::canonicalize(worktree_path)
+        .unwrap_or_else(|_| worktree_path.to_path_buf());
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    let name = canonical
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("worktree");
+
+    state_dir.join(format!("{}-{:016x}.log", name, hash))
 }
 
 pub struct App {
@@ -44,6 +99,9 @@ pub struct App {
     pub exit_path: Option<PathBuf>,
     pub needs_full_redraw: bool,
     pub config: Config,
+    pub init_jobs: Vec<InitJob>,
+    pub init_outcome: Option<InitJobOutcome>,
+    pub init_logs_scroll: u16,
 }
 
 impl App {
@@ -73,6 +131,9 @@ impl App {
             exit_path: None,
             needs_full_redraw: false,
             config,
+            init_jobs: Vec::new(),
+            init_outcome: None,
+            init_logs_scroll: 0,
         };
         app.list_state.select(Some(0));
         Ok(app)
@@ -111,6 +172,10 @@ impl App {
                 self.handle_event(event::read()?)?;
             }
 
+            // Poll background init jobs and expire stale completion status
+            self.poll_init_jobs();
+            self.expire_init_outcome();
+
             // Tick
             if last_tick.elapsed() >= tick_rate {
                 last_tick = Instant::now();
@@ -138,6 +203,7 @@ impl App {
             AppMode::ConfirmDelete => self.handle_delete_key(key),
             AppMode::Deleting => Ok(()), // Ignore input while deleting
             AppMode::Help => self.handle_help_key(key),
+            AppMode::InitLogs => self.handle_init_logs_key(key),
         }
     }
 
@@ -191,6 +257,7 @@ impl App {
                 self.refresh_branches();
             }
             "help" => self.mode = AppMode::Help,
+            "init_logs" => self.open_init_logs(),
             "cd" => self.exit_to_worktree(),
             _ => {
                 self.error = Some(format!("Unknown action: {}", action));
@@ -324,6 +391,35 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn handle_init_logs_key(&mut self, key: KeyCode) -> Result<()> {
+        match key {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.mode = AppMode::Normal;
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.init_logs_scroll = self.init_logs_scroll.saturating_add(1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.init_logs_scroll = self.init_logs_scroll.saturating_sub(1);
+            }
+            KeyCode::PageDown => {
+                self.init_logs_scroll = self.init_logs_scroll.saturating_add(10);
+            }
+            KeyCode::PageUp => {
+                self.init_logs_scroll = self.init_logs_scroll.saturating_sub(10);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn open_init_logs(&mut self) {
+        if self.selected_worktree().is_some() {
+            self.init_logs_scroll = 0;
+            self.mode = AppMode::InitLogs;
+        }
     }
 
     fn select_next(&mut self) {
@@ -471,14 +567,13 @@ impl App {
                 let status_path = worktree_path.join(".worktree-status.md");
                 let _ = std::fs::write(&status_path, status_content);
 
-                // Run init script if exists
+                // Keep wtm's helper file out of `git status`
+                self.exclude_helper_files(&worktree_path);
+
+                // Run init script in the background if it exists
                 let init_script = self.repo_path.join(".worktree-init.sh");
                 if init_script.exists() {
-                    let _ = std::process::Command::new("sh")
-                        .arg(&init_script)
-                        .arg(&worktree_path)
-                        .current_dir(&worktree_path)
-                        .status();
+                    self.spawn_init_job(&branch, &worktree_path, &init_script);
                 }
 
                 // Reset state and refresh
@@ -497,6 +592,125 @@ impl App {
         Ok(())
     }
 
+    /// Append wtm's helper files to the repo's `.git/info/exclude` so they never
+    /// show up as untracked changes. `info/exclude` lives in the common git dir
+    /// and is shared by all worktrees, so a single entry covers every wtm
+    /// worktree. Best-effort and idempotent.
+    fn exclude_helper_files(&self, _worktree_path: &Path) {
+        let exclude = self.repo_path.join(".git").join("info").join("exclude");
+        let entry = ".worktree-status.md";
+        let existing = std::fs::read_to_string(&exclude).unwrap_or_default();
+        if existing.lines().any(|l| l.trim() == entry) {
+            return;
+        }
+        if let Some(parent) = exclude.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let mut content = existing;
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(entry);
+        content.push('\n');
+        let _ = std::fs::write(&exclude, content);
+    }
+
+    /// Spawn `.worktree-init.sh` in the background. stdout/stderr are redirected
+    /// to a central log file (never inherited), so the TUI display is untouched.
+    fn spawn_init_job(&mut self, branch: &str, worktree_path: &Path, init_script: &Path) {
+        use std::process::{Command, Stdio};
+
+        // Drop any stale "done" status so it doesn't compete with the new run.
+        self.init_outcome = None;
+
+        let log_path = init_log_path(worktree_path);
+        if let Some(parent) = log_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                self.error = Some(format!("Init: cannot create log dir: {}", e));
+                return;
+            }
+        }
+
+        let log_file = match std::fs::File::create(&log_path) {
+            Ok(f) => f,
+            Err(e) => {
+                self.error = Some(format!("Init: cannot create log file: {}", e));
+                return;
+            }
+        };
+        let log_err = match log_file.try_clone() {
+            Ok(f) => f,
+            Err(e) => {
+                self.error = Some(format!("Init: cannot clone log handle: {}", e));
+                return;
+            }
+        };
+
+        match Command::new("sh")
+            .arg(init_script)
+            .arg(worktree_path)
+            .current_dir(worktree_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log_file))
+            .stderr(Stdio::from(log_err))
+            .spawn()
+        {
+            Ok(child) => self.init_jobs.push(InitJob {
+                child,
+                worktree_path: worktree_path.to_path_buf(),
+                branch: branch.to_string(),
+                started: Instant::now(),
+            }),
+            Err(e) => self.error = Some(format!("Init: failed to spawn script: {}", e)),
+        }
+    }
+
+    /// Reap finished background init jobs without blocking. Called every loop tick.
+    fn poll_init_jobs(&mut self) {
+        if self.init_jobs.is_empty() {
+            return;
+        }
+
+        let mut finished: Vec<InitJobOutcome> = Vec::new();
+        let mut still_running: Vec<InitJob> = Vec::new();
+
+        for mut job in self.init_jobs.drain(..) {
+            match job.child.try_wait() {
+                Ok(Some(status)) => finished.push(InitJobOutcome {
+                    branch: job.branch.clone(),
+                    success: status.success(),
+                    finished: Instant::now(),
+                }),
+                Ok(None) => still_running.push(job),
+                Err(e) => {
+                    self.error = Some(format!("Init: poll error for {}: {}", job.branch, e));
+                    finished.push(InitJobOutcome {
+                        branch: job.branch.clone(),
+                        success: false,
+                        finished: Instant::now(),
+                    });
+                }
+            }
+        }
+        self.init_jobs = still_running;
+
+        if let Some(last) = finished.into_iter().last() {
+            // Surface the most recent completion and refresh so files the
+            // script produced (deps, build output) are reflected.
+            self.init_outcome = Some(last);
+            self.refresh_worktrees();
+        }
+    }
+
+    /// Clear the footer's "done" status after a few seconds.
+    fn expire_init_outcome(&mut self) {
+        if let Some(o) = &self.init_outcome {
+            if o.finished.elapsed() >= Duration::from_secs(8) {
+                self.init_outcome = None;
+            }
+        }
+    }
+
     fn delete_worktree(&mut self) -> Result<()> {
         if let Some(wt) = self.worktrees.get(self.selected) {
             if wt.is_main {
@@ -506,6 +720,17 @@ impl App {
             }
 
             let path = wt.path.clone();
+
+            // Kill any init job still running in this worktree so it doesn't
+            // write into a directory git is about to remove.
+            for job in &mut self.init_jobs {
+                if job.worktree_path == path {
+                    let _ = job.child.kill();
+                }
+            }
+            self.init_jobs.retain(|j| j.worktree_path != path);
+            let _ = std::fs::remove_file(init_log_path(&path));
+
             match crate::git::delete_worktree(&self.repo_path, &path, wt.has_changes) {
                 Ok(()) => {
                     self.mode = AppMode::Normal;

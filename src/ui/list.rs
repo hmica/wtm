@@ -26,8 +26,13 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             // Determine if branch is merged and ready to delete (ahead=0, clean, not main)
             let is_merged = !wt.is_main && wt.ahead == 0 && !wt.has_changes;
 
-            // Indicator: * for dirty, ✓ for merged, space otherwise
-            let indicator = if wt.has_changes {
+            // Whether a background init script is still running in this worktree
+            let init_running = app.init_jobs.iter().any(|j| j.worktree_path == wt.path);
+
+            // Indicator: ⟳ for init running, * for dirty, ✓ for merged, space otherwise
+            let indicator = if init_running {
+                "⟳"
+            } else if wt.has_changes {
                 "*"
             } else if is_merged {
                 "✓"
@@ -58,7 +63,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             let line = Line::from(vec![
                 Span::styled(
                     format!("{} ", indicator),
-                    if wt.has_changes {
+                    if init_running || wt.has_changes {
                         Style::default().fg(Color::Yellow)
                     } else if is_merged {
                         Style::default().fg(Color::Green)
